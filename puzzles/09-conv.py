@@ -207,7 +207,7 @@ def tl_conv1d_multi_outchannel(X, K, BLOCK_N: int, BLOCK_L: int):
 
 
 """
-Then let's try img2col and use T.gemm to speedup the computation.
+Then let's try im2col and use T.gemm to speedup the computation.
 """
 
 
@@ -217,7 +217,7 @@ Then let's try img2col and use T.gemm to speedup the computation.
         tilelang.PassConfigKey.TL_DISABLE_TMA_LOWER: True,
     },
 )
-def tl_conv1d_img2col(X, K, BLOCK_N: int, BLOCK_L: int):
+def tl_conv1d_im2col(X, K, BLOCK_N: int, BLOCK_L: int):
     N, L, KL, F = T.const("N, L, KL, F")
     dtype = T.float16
     accum_dtype = T.float32
@@ -230,8 +230,8 @@ def tl_conv1d_img2col(X, K, BLOCK_N: int, BLOCK_L: int):
     return O
 
 
-def run_conv1d_img2col():
-    print("\n=== Convolution 1D Img2Col ===\n")
+def run_conv1d_im2col():
+    print("\n=== Convolution 1D im2col ===\n")
     N = 128
     L = 128
     BLOCK_N = 16
@@ -247,7 +247,7 @@ def run_conv1d_img2col():
         "BLOCK_L": BLOCK_L,
     }
     test_puzzle(tl_conv1d_multi_outchannel, ref_conv1d_multi_outchannel, args_dict)
-    test_puzzle(tl_conv1d_img2col, ref_conv1d_multi_outchannel, args_dict)
+    test_puzzle(tl_conv1d_im2col, ref_conv1d_multi_outchannel, args_dict)
     bench_puzzle(
         tl_conv1d_multi_outchannel,
         ref_conv1d_multi_outchannel,
@@ -256,14 +256,14 @@ def run_conv1d_img2col():
         bench_name="Conv1D Multi OutChannel Naive",
     )
     bench_puzzle(
-        tl_conv1d_img2col,
+        tl_conv1d_im2col,
         ref_conv1d_multi_outchannel,
         args_dict,
         bench_torch=False,
-        bench_name="Conv1D Img2Col",
+        bench_name="Conv1D im2col",
     )
 
 
 if __name__ == "__main__":
     run_conv1d_naive()
-    run_conv1d_img2col()
+    run_conv1d_im2col()
