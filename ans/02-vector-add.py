@@ -50,8 +50,8 @@ def tl_add_1d(A, B, BLOCK_N: int):
     B: T.Tensor((N,), T.float16)
     C = T.empty((N,), T.float16)
 
-    with T.Kernel(N // BLOCK_N, threads=256) as pid_n:
-        base_idx = pid_n * BLOCK_N
+    with T.Kernel(N // BLOCK_N, threads=256) as bx:
+        base_idx = bx * BLOCK_N
         for i in T.Parallel(BLOCK_N):
             C[base_idx + i] = A[base_idx + i] + B[base_idx + i]
 
@@ -81,6 +81,9 @@ Inputs:
 Output:
     C: Tensor([N,], T.float16)  # output tensor
 
+Output:
+    C: [N,]  # output tensor
+
 Definition:
     for i in range(N):
         C[i] = max(0, A[i] * B[i])
@@ -102,15 +105,14 @@ def tl_mul_relu_1d(A, B, BLOCK_N: int):
     B: T.Tensor((N,), T.float16)
     C = T.empty((N,), T.float16)
 
-    # TODO: Implement this function
-    with T.Kernel(N // BLOCK_N, threads=256) as pid_n:
-        base_idx = pid_n * BLOCK_N
+    with T.Kernel(N // BLOCK_N, threads=256) as bx:
+        base_idx = bx * BLOCK_N
         for i in T.Parallel(BLOCK_N):
             C[base_idx + i] = T.if_then_else(
-                A[base_idx + i] * B[base_idx + i] > 0,
-                A[base_idx + i] * B[base_idx + i],
-                0,
-            )
+                    A[base_idx + i] * B[base_idx + i] > 0,
+                    A[base_idx + i] * B[base_idx + i],
+                    0,
+                    )
 
     return C
 
@@ -167,27 +169,36 @@ fragment in a unified way as we do to a T.Buffer.
     },
 )
 def tl_mul_relu_1d_mem(A, B, BLOCK_N: int):
+    """
+    Essentially write from GMEM straight away to register file
+
+    Use T.alloc_fragment(shape, dtype) to first allocate BLOCK_N space in register
+    Perform required sum + ReLU
+    Accumulate in register
+    Write back to GMEM
+    """
+
     N = T.const("N")
     dtype = T.float16
     A: T.Tensor((N,), dtype)
     B: T.Tensor((N,), dtype)
     C = T.empty((N,), dtype)
 
-    # TODO: Implement this function
-    with T.Kernel(N // BLOCK_N, threads=256) as pid_n:
-        base_idx = pid_n * BLOCK_N
-        A_local = T.alloc_fragment((BLOCK_N), dtype)
-        B_local = T.alloc_fragment((BLOCK_N), dtype)
-        C_local = T.alloc_fragment((BLOCK_N), dtype)
+    with T.Kernel(N // BLOCK_N, threads=256) as bx:
+        base_idx = bx * BLOCK_N
+        A_register = T.alloc_fragment((BLOCK_N), dtype) # Allocate BLOCK_N space in register
+        B_register = T.alloc_fragment((BLOCK_N), dtype) # Allocate BLOCK_N space in register
+        C_register = T.alloc_fragment((BLOCK_N), dtype) # Allocate BLOCK_N space in register
 
-        T.copy(A[base_idx], A_local)
-        T.copy(B[base_idx], B_local)
+        T.copy(A[base_idx], A_register)
+        T.copy(B[base_idx], B_register)
 
         for i in T.Parallel(BLOCK_N):
-            C_local[i] = A_local[i] * B_local[i]
-            C_local[i] = T.if_then_else(C_local[i] > 0, C_local[i], 0)
+            C_register[i] = A_register[i] * B_register[i]
+            C_register[i] = T.if_then_else(C_register[i] > 0, C_register[i], 0)
 
-        T.copy(C_local, C[base_idx])
+        T.copy(C_register, C[base_idx])
+
 
     return C
 
@@ -226,3 +237,93 @@ if __name__ == "__main__":
     run_add_1d()
     run_mul_relu_1d()
     run_mul_relu_1d_mem()
+
+# Results
+# === Vector Add 1D ===
+
+# 2026-04-28 07:36:30  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_add_1d` with `out_idx=[-1]`
+# 2026-04-28 07:36:33  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_add_1d`
+# ✅ Results match: True
+
+# === Vector Multiplication with ReLU 1D ===
+
+# 2026-04-28 07:36:34  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_mul_relu_1d` with `out_idx=[-1]`
+# 2026-04-28 07:36:37  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_mul_relu_1d`
+# ✅ Results match: True
+
+# === Vector Multiplication with ReLU 1D (Memory Optimized) ===
+
+# Naive TL Implementation:
+# 2026-04-28 07:36:38  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_mul_relu_1d` with `out_idx=[-1]`
+# 2026-04-28 07:36:42  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_mul_relu_1d`
+# 2026-04-28 07:36:42  [TileLang:tilelang.jit.kernel:WARNING] (kernel.py:562): print_source_code is deprecated; use show_source() or export_sources() instead.
+# #include <tl_templates/cuda/gemm.h>
+# #include <tl_templates/cuda/copy.h>
+# #include <tl_templates/cuda/reduce.h>
+# #include <tl_templates/cuda/ldsm.h>
+# #include <tl_templates/cuda/threadblock_swizzle.h>
+# #include <tl_templates/cuda/debug.h>
+# #ifdef ENABLE_BF16
+# #include <tl_templates/cuda/cuda_bf16_fallbacks.cuh>
+# #endif
+
+# extern "C" __global__ void tl_mul_relu_1d_kernel(const half_t* __restrict__ A, const half_t* __restrict__ B, half_t* __restrict__ C);
+# extern "C" __global__ void __launch_bounds__(256, 1) tl_mul_relu_1d_kernel(const half_t* __restrict__ A, const half_t* __restrict__ B, half_t* __restrict__ C) {
+#   for (int i_s = 0; i_s < 4; ++i_s) {
+#     half_t condval;
+#     if ((half_t(0x0p+0f/*0.000000e+00*/) < (A[(((((int)blockIdx.x) * 1024) + (((int)threadIdx.x) * 4)) + i_s)] * B[(((((int)blockIdx.x) * 1024) + (((int)threadIdx.x) * 4)) + i_s)]))) {
+#       condval = (A[(((((int)blockIdx.x) * 1024) + (((int)threadIdx.x) * 4)) + i_s)] * B[(((((int)blockIdx.x) * 1024) + (((int)threadIdx.x) * 4)) + i_s)]);
+#     } else {
+#       condval = half_t(0x0p+0f/*0.000000e+00*/);
+#     }
+#     C[(((((int)blockIdx.x) * 1024) + (((int)threadIdx.x) * 4)) + i_s)] = condval;
+#   }
+# }
+
+
+# Optimized Version
+# 2026-04-28 07:36:42  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_mul_relu_1d_mem` with `out_idx=[-1]`
+# 2026-04-28 07:36:45  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_mul_relu_1d_mem`
+# 2026-04-28 07:36:45  [TileLang:tilelang.jit.kernel:WARNING] (kernel.py:562): print_source_code is deprecated; use show_source() or export_sources() instead.
+# #include <tl_templates/cuda/gemm.h>
+# #include <tl_templates/cuda/copy.h>
+# #include <tl_templates/cuda/reduce.h>
+# #include <tl_templates/cuda/ldsm.h>
+# #include <tl_templates/cuda/threadblock_swizzle.h>
+# #include <tl_templates/cuda/debug.h>
+# #ifdef ENABLE_BF16
+# #include <tl_templates/cuda/cuda_bf16_fallbacks.cuh>
+# #endif
+
+# extern "C" __global__ void tl_mul_relu_1d_mem_kernel(const half_t* __restrict__ A, const half_t* __restrict__ B, half_t* __restrict__ C);
+# extern "C" __global__ void __launch_bounds__(256, 1) tl_mul_relu_1d_mem_kernel(const half_t* __restrict__ A, const half_t* __restrict__ B, half_t* __restrict__ C) {
+#   half_t A_register[4];
+#   half_t B_register[4];
+#   half_t C_register[4];
+#   *(uint2*)(A_register + 0) = *(uint2*)(A + ((((int)blockIdx.x) * 1024) + (((int)threadIdx.x) * 4)));
+#   *(uint2*)(B_register + 0) = *(uint2*)(B + ((((int)blockIdx.x) * 1024) + (((int)threadIdx.x) * 4)));
+#   #pragma unroll
+#   for (int i = 0; i < 4; ++i) {
+#     C_register[i] = (A_register[i] * B_register[i]);
+#     half_t condval;
+#     if ((half_t(0x0p+0f/*0.000000e+00*/) < C_register[i])) {
+#       condval = C_register[i];
+#     } else {
+#       condval = half_t(0x0p+0f/*0.000000e+00*/);
+#     }
+#     C_register[i] = condval;
+#   }
+#   *(uint2*)(C + ((((int)blockIdx.x) * 1024) + (((int)threadIdx.x) * 4))) = *(uint2*)(C_register + 0);
+# }
+
+
+# 2026-04-28 07:36:45  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_mul_relu_1d_mem` with `out_idx=[-1]`
+# 2026-04-28 07:36:49  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_mul_relu_1d_mem`
+# ✅ Results match: True
+# 2026-04-28 07:36:49  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_mul_relu_1d` with `out_idx=[-1]`
+# 2026-04-28 07:36:53  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_mul_relu_1d`
+# Torch time: 0.010 ms
+# TL Naive time: 0.007 ms
+# 2026-04-28 07:36:53  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_mul_relu_1d_mem` with `out_idx=[-1]`
+# 2026-04-28 07:36:57  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_mul_relu_1d_mem`
+# TL OPT time: 0.005 ms
