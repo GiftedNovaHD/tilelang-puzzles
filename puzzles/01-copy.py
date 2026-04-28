@@ -104,8 +104,8 @@ def tl_copy_1d_multi_threads(A):
     A: T.Tensor((N,), T.float16)
     B = T.empty((N,), T.float16)
 
-    # TODO: Implement this function
-
+    with T.Kernel(1, threads=256) as _:
+        T.copy(A, B)
     return B
 
 
@@ -151,6 +151,11 @@ def tl_copy_1d_parallel(A, BLOCK_N: int):
     A: T.Tensor((N,), T.float16)
     B = T.empty((N,), T.float16)
 
+    with T.Kernel(T.ceildiv(N, BLOCK_N), threads=256) as bx:
+        T.copy(
+                A[bx * BLOCK_N: (bx + 1) * BLOCK_N],
+                B[bx * BLOCK_N: (bx + 1) * BLOCK_N],
+                )
     # TODO: Implement this function
 
     return B
@@ -174,3 +179,33 @@ if __name__ == "__main__":
     run_copy_1d_serial()
     run_copy_1d_multi_threads()
     run_copy_1d_parallel()
+
+# Results
+# === Copy 1D Serial ===
+
+# 2026-04-28 06:58:17  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_copy_1d_serial` with `out_idx=[-1]`
+# 2026-04-28 06:58:20  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_copy_1d_serial`
+# ✅ Results match: True
+
+# === Copy 1D Multi-threads ===
+
+# 2026-04-28 06:58:21  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_copy_1d_multi_threads` with `out_idx=[-1]`
+# 2026-04-28 06:58:24  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_copy_1d_multi_threads`
+# ✅ Results match: True
+# 2026-04-28 06:58:24  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_copy_1d_serial` with `out_idx=[-1]`
+# 2026-04-28 06:59:32  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_copy_1d_serial`
+# Torch time: 0.002 ms
+# TL Serial time: 4.086 ms
+# 2026-04-28 06:59:33  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_copy_1d_multi_threads` with `out_idx=[-1]`
+# 2026-04-28 06:59:36  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_copy_1d_multi_threads`
+# TL Multi-threads time: 0.015 ms
+
+# === Copy 1D Parallel ===
+
+# 2026-04-28 06:59:37  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_copy_1d_parallel` with `out_idx=[-1]`
+# 2026-04-28 06:59:40  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_copy_1d_parallel`
+# ✅ Results match: True
+# 2026-04-28 06:59:40  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:133): TileLang begins to compile kernel `tl_copy_1d_parallel` with `out_idx=[-1]`
+# 2026-04-28 06:59:43  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:141): TileLang completes to compile kernel `tl_copy_1d_parallel`
+# Torch time: 0.002 ms
+# TL Parallel time: 0.002 ms
