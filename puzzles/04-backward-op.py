@@ -55,7 +55,19 @@ def tl_mul_relu_bcast(A, B, BLOCK_N: int, BLOCK_M: int):
     C = T.empty((N, M), dtype)
 
     # TODO: Implement this function
+    with T.Kernel(T.ceildiv(N, BLOCK_N), T.ceildiv(M, BLOCK_M), threads=128) as (pid_n, pid_m):
+        n_idx = pid_n * BLOCK_N
+        m_idx = pid_m * BLOCK_M
+        A_f = T.alloc_fragment((BLOCK_N, BLOCK_M), dtype)
+        B_f = T.alloc_fragment((BLOCK_M,), dtype)
+        C_f = T.alloc_fragment((BLOCK_N, BLOCK_M), dtype)
 
+        T.copy(A[n_idx, m_idx], A_f)
+        T.copy(B[m_idx], B_f)
+        for i, j in T.Parallel(BLOCK_N, BLOCK_M):
+            C_f[i, j] = A_f[i, j] * B_f[j]
+            C_f[i, j] = T.if_then_else(C_f[i, j] > 0, C_f[i, j], 0)
+        T.copy(C_f, C[n_idx, m_idx])
     return C
 
 
@@ -127,6 +139,26 @@ def tl_mul_relu_bwd(A, B, dC, BLOCK_N: int, BLOCK_M: int):
     B: T.Tensor((M,), dtype)
     dC: T.Tensor((N, M), dtype)
     dA = T.empty((N, M), dtype)
+
+    with T.Kernel(T.ceildiv(N, BLOCK_N), T.ceildiv(M, BLOCK_M), threads=256) as (pid_n, pid_m):
+        n_idx, m_idx = pid_n * BLOCK_N, pid_m * BLOCK_M
+        A_register = T.alloc_fragment((BLOCK_N, BLOCK_M), dtype)
+        B_register = T.alloc_fragment((BLOCK_M,), dtype)
+        dC_register = T.alloc_fragment((BLOCK_N, BLOCK_M), dtype)
+        dA_register = T.alloc_fragment((BLOCK_N, BLOCK_M), dtype)
+
+        # Copy to regs
+        T.copy(A[n_idx, m_idx], A_register)
+        T.copy(B[m_idx], B_register)
+        T.copy(dC[n_idx, m_idx], dC_register)
+
+        # Receive dC, compute dA
+        for i, j in T.Parallel(BLOCK_N, BLOCK_M):
+            dA_register[i, j] = T.if_then_else(A_register[i, j] * B_register[j] > 0,
+                                               1,
+                                               0,
+                                               ) * dC_register[i, j] * B_register[j]
+        T.copy(dA_register, dA[n_idx, m_idx])
 
     # TODO: Implement this function
 
