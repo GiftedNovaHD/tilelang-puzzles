@@ -57,8 +57,23 @@ def tl_outer_add(A, B, BLOCK_N: int, BLOCK_M: int):
     B: T.Tensor((M,), dtype)
     C = T.empty((N, M), dtype)
 
-    # TODO: Implement this function
+    with T.Kernel(T.ceildiv(N, BLOCK_N), T.ceildiv(M, BLOCK_M), threads=256) as (pid_n, pid_m):
+        # Global indices
+        base_idx_n, base_idx_m = pid_n * BLOCK_N, pid_m * BLOCK_M
 
+        # Allocate space in regs
+        A_f = T.alloc_fragment((BLOCK_N,), dtype)
+        B_f = T.alloc_fragment((BLOCK_M,), dtype)
+        C_f = T.alloc_fragment((BLOCK_N, BLOCK_M), dtype)
+
+        # Copy to regs
+        T.copy(A[base_idx_n], A_f)
+        T.copy(B[base_idx_m], B_f)
+
+        for i, j in T.Parallel(BLOCK_N, BLOCK_M):
+            C_f[i, j] = A_f[i] + B_f[j]
+
+        T.copy(C_f, C[base_idx_n, base_idx_m])
     return C
 
 
